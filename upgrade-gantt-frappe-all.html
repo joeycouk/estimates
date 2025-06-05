@@ -1,0 +1,717 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <title>Iowa Medicaid Upgrade Gantt (Frappe Gantt, All Scenarios)</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/frappe-gantt/dist/frappe-gantt.css">
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 2em;
+    }
+
+    .gantt-container {}
+
+    h2 {
+      margin-top: 2em;
+    }
+
+    .collapsible {
+      background-color: #f1f1f1;
+      color: #333;
+      cursor: pointer;
+      padding: 12px 18px;
+      width: 100%;
+      border: none;
+      text-align: left;
+      outline: none;
+      font-size: 1.1em;
+      margin-bottom: 0.2em;
+      border-radius: 4px;
+      transition: background 0.2s;
+    }
+
+    .collapsible.active,
+    .collapsible:hover {
+      background-color: #dbeafe;
+    }
+
+    .collapsible-content {
+      padding: 0 18px 12px 18px;
+      display: none;
+      overflow: hidden;
+      background-color: #fafbfc;
+      border-left: 2px solid #1976d2;
+      border-radius: 0 0 4px 4px;
+      margin-bottom: 1em;
+    }
+
+    .role-toggle {
+      background: #e3e3e3;
+      border: 1px solid #bdbdbd;
+      border-radius: 4px;
+      padding: 6px 16px;
+      font-size: 1em;
+      cursor: pointer;
+      transition: background 0.2s, color 0.2s;
+    }
+
+    .role-toggle.active {
+      background: #1976d2;
+      color: #fff;
+      border-color: #1976d2;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>Iowa Medicaid Upgrade Gantt Charts (Frappe Gantt, 1/2/3 Developers)</h1>
+  <p>
+    <!-- Date input to change start date -->
+    <label for="start-date">Project Start Date: </label>
+    <!-- Use the value from localStorage -->
+    <input type="date" id="start-date" onchange="setStartDate(this.value);">
+  </p>
+
+  <p>
+    <label for="view-mode">View Mode: </label>
+    <select id="view-mode">
+      <option value="Day">Day</option>
+      <option value="Week" selected>Week</option>
+      <option value="Month">Month</option>
+    </select>
+  </p>
+  <div id="gantt1" class="gantt-container"></div>
+  <div id="medicaid-tasks" style="margin-top:2em;"></div>
+  <script src="https://cdn.jsdelivr.net/npm/frappe-gantt/dist/frappe-gantt.umd.js"></script>
+  <script>
+    // Helper: task descriptions from Medicaid.md
+    const descriptions = {
+      core: 'Core structure of EDBC rulebase using latest techniques and new data model.',
+      med: 'Refactor/Import legacy IOWA Medicaid rules into the new rulebase model. Special logic for budgeting hierarchy, CE, DV, Extended budgets. Risk: Lack of documentation.',
+      exec: 'Base product provides basic communication with OIA Hub via Spring RestTemplate.',
+      // int: 'Custom cloud style "builders" and "adapters" (input/output integration). New ROM/EMO data models. Consider KEES features.',
+      hub: 'Tech team configures OIA Hubs. Workspace strategy, API users, Decision Services.',
+      log: 'Persist request JSON payloads (PII scrubbed). Configurable response persistence. NoSQL DB. Link logs to EDBC_ID.',
+      ver: 'GIT-based version control. Custom hooks for snapshot build. CI/CD pipeline.',
+      dep: 'Deployment "Container" approach. Scripting for Deployments REST API. CI/CD integration.'
+    };
+    // Helper: color per task
+    const colors = {
+      core: '#1976d2', // blue
+      med: '#43a047', // green
+      exec: '#fbc02d', // yellow
+      int: '#8e24aa', // purple
+      hub: '#00838f', // teal
+      log: '#e64a19', // orange
+      ver: '#5d4037', // brown
+      dep: '#c62828' // red
+    };
+    function colorize(tasks) {
+      return tasks.map(t => ({
+        ...t,
+        custom_class: t.id + '-task',
+        description: descriptions[t.id] || ''
+      }));
+    }
+    // Set project start date (user can change this value)
+    function getStartDate() {
+      let val = localStorage.getItem('PROJECT_START_DATE') || '2025-06-10';
+      // set start-date input value and set the to the new val
+      document.getElementById('start-date').value = val;
+      return val;
+    }
+    function setStartDate(val) {
+      localStorage.setItem('PROJECT_START_DATE', val);
+      location.reload();
+    }
+    let PROJECT_START_DATE = getStartDate();
+
+    // Helper: task durations in days (from Medicaid.md, 1 dev = 8h/day, using Gold hours)
+    const durations = {
+      core: Math.ceil(400 / 8), // 38  added to include integration + 100
+      med: Math.ceil(700 / 8),  // 75 added to include integration + 100
+      exec: Math.ceil(200 / 8), // 25
+      int: Math.ceil(200 / 8),  // 25
+      hub: Math.ceil(40 / 8),  // 20
+      log: Math.ceil(80 / 8),   // 10
+      ver: Math.ceil(80 / 8),   // 10
+      dep: Math.ceil(80 / 8)    // 10
+    };
+
+    // Helper: get max end date from dependencies
+    function getDependencyEnd(tasks, depIds) {
+      if (!depIds) return PROJECT_START_DATE;
+      const ids = depIds.split(',').map(s => s.trim()).filter(Boolean);
+      let max = PROJECT_START_DATE;
+      ids.forEach(id => {
+        const t = tasks.find(x => x.id === id);
+        if (t && t.end > max) max = t.end;
+      });
+      return max;
+    }
+
+    function getDependencyStart(tasks, depIds) {
+      if (!depIds) return PROJECT_START_DATE;
+      const ids = depIds.split(',').map(s => s.trim()).filter(Boolean);
+      let min = null;
+      ids.forEach(id => {
+        const t = tasks.find(x => x.id === id);
+        if (t && (!min || t.start < min)) min = t.start;
+      });
+      return min || PROJECT_START_DATE;
+    }
+
+    // Helper: add days to a date string
+    function addDays(dateStr, days) {
+      const d = new Date(dateStr);
+      d.setDate(d.getDate() + days);
+      return d.toISOString().slice(0, 10);
+    }
+
+    // Only one Gantt chart, with three versions of 'Rebuild Medicaid on New Core' (med) for 1, 2, 3 devs
+    // Each version is color-coded using --g-bar-color
+    const medVariants = [
+      { id: 'med1', name: 'Rebuild Medicaid on New Core (1 Dev) ', devs: 1, efficiency: 1.0, color: '#43a047' },
+      { id: 'med2', name: 'Rebuild Medicaid on New Core (2 Devs).', devs: 2, efficiency: 0.8, color: '#1976d2' },
+      { id: 'med3', name: 'Rebuild Medicaid on New Core (3 Devs).', devs: 3, efficiency: 0.7, color: '#fbc02d' },
+      { id: 'med4', name: 'Rebuild Medicaid on New Core (1 Dev 1 Shadow) ', devs: 1, shadow: 1, efficiency: .65, color: '#8e24aa' },
+      { id: 'med5', name: 'Rebuild Medicaid on New Core (2 Dev 2 Shadow) ', devs: 2, shadow: 2, efficiency: .5, color: '#00838f' },
+      { id: 'med6', name: 'Rebuild Medicaid on New Core (3 Dev 3 Shadow) ', devs: 3, shadow: 3, efficiency: .4, color: '#e64a19' }
+    ];
+    // Build base tasks (all but med)
+    const baseTasks = [
+      { id: 'core', name: 'Build Rulebase Core', dependencies: '', duration: durations.core, },
+      { id: 'exec', name: 'Rules Execution Services', dependencies: '', duration: durations.exec, },
+      // { id: 'int', name: 'Integration', dependencies: 'med1,exec', duration: durations.int, }
+      { id: 'hub', name: 'Configure OIA Hubs', dependencies: '', duration: durations.hub, },
+      { id: 'log', name: 'Logging Strategy', dependencies: 'exec', duration: durations.log, },
+      { id: 'ver', name: 'Version Control Strategy', dependencies: '', duration: durations.ver, },
+      { id: 'dep', name: 'Deployment Strategy', dependencies: 'ver,hub', duration: durations.dep, }
+    ];
+    // Helper: calculate med shadow duration with staged productivity impact
+    function calculateShadowMedDays(baseHours, devs, shadow) {
+      // For each dev, if there is a matching shadow, reduce their efficiency for the shadow period
+      // Each shadowed dev is only 50% as productive during shadow period (phases 1-3)
+      // After shadow period, all devs are at full productivity (phase 4)
+      const phases = [
+        { days: 10, impact: 0.2 },  // First 2 weeks: 80% reduction (20% productivity)
+        { days: 10, impact: 0.4 },  // Next week: 60% reduction (40% productivity)
+        { days: 22, impact: 0.6 },   // Remainder of first month: 40% reduction (60% productivity)
+        { days: null, impact: 0.9 } // After first month: 10% reduction (90% productivity)
+      ];
+      let remaining = baseHours;
+      let totalDays = 0;
+      for (let i = 0; i < phases.length; i++) {
+        let { days, impact } = phases[i];
+        // For shadowed devs, halve their productivity during shadow period (phases 1-3)
+        let effectiveDevs = devs;
+        if (shadow && i < 3) {
+          // Each shadowed dev is only 50% as productive
+          effectiveDevs = devs - shadow + (shadow * 0.5);
+        }
+        let phaseEff = effectiveDevs * impact * 8; // effective hours per day
+        if (days === null) {
+          // Last phase: use up all remaining hours
+          let phaseDays = Math.ceil(remaining / phaseEff);
+          totalDays += phaseDays;
+          break;
+        } else {
+          let phaseHours = days * phaseEff;
+          if (remaining > phaseHours) {
+            totalDays += days;
+            remaining -= phaseHours;
+          } else {
+            totalDays += Math.ceil(remaining / phaseEff);
+            remaining = 0;
+            break;
+          }
+        }
+      }
+      return totalDays;
+    }
+    // Build all tasks for the chart
+    function buildCombinedTasks() {
+      const tasks = [];
+      // Add core first
+      const core = baseTasks[0];
+      const coreStart = PROJECT_START_DATE;
+      const coreEnd = addDays(coreStart, core.duration);
+      tasks.push({ ...core, start: coreStart, end: coreEnd, progress: 0, custom_class: 'core-task', description: descriptions[core.id] });
+      // Add med variants
+      medVariants.forEach((med, idx) => {
+        const medStart = coreEnd;
+        let medDays;
+        if (med.shadow) {
+          // Shadow variants use the staged productivity formula with shadow adjustment
+          medDays = calculateShadowMedDays(600, med.devs, med.shadow);
+          // console.log(`Shadow variant ${med.id} will take ${medDays} days (base 600 hours, ${med.devs} devs, ${med.shadow} shadow)`);
+        } else {
+          // Regular variants use the simple formula
+          const medEffort = 600 / (med.devs * med.efficiency);
+          medDays = Math.ceil(medEffort / 8);
+          // console.log(`Regular variant ${med.id} will take ${medDays} days (base 600 hours, ${med.devs} devs, efficiency ${med.efficiency})`);
+        }
+        const medEnd = addDays(medStart, medDays);
+        let medDescription = descriptions['med'];
+        if (med.shadow) {
+          medDescription += '<br><br><strong>Job Shadow Impact:</strong> For the first 2 weeks, each shadowed dev is only 50% as productive (80% reduction), next 10 days at 40% productivity (60% reduction), next 22 days at 60% productivity (40% reduction),<br>then 90% productivity (10% reduction) for the remainder.<br><strong>Calculated duration:</strong> ' + medDays + ' days with ' + med.devs + ' dev(s) and ' + med.shadow + ' shadow(s).';
+        }
+        tasks.push({
+          id: med.id,
+          name: med.name,
+          start: medStart,
+          end: medEnd,
+          progress: 0,
+          dependencies: 'core',
+          custom_class: med.id + '-task',
+          description: medDescription,
+          color: med.color
+        });
+      });
+      // Add remaining tasks, using med1 as the dependency for Integration
+      let prevTasks = { core: coreEnd, med1: tasks.find(t => t.id === 'med1').end };
+      baseTasks.slice(1).forEach(task => {
+        let depEnd = PROJECT_START_DATE;
+        if (task.dependencies) {
+          const ids = task.dependencies.split(',').map(s => s.trim());
+          depEnd = ids.reduce((max, id) => {
+            const t = tasks.find(x => x.id === id);
+            return t && t.end > max ? t.end : max;
+          }, PROJECT_START_DATE);
+        }
+        const start = depEnd;
+        const end = addDays(start, task.duration);
+        tasks.push({
+          ...task,
+          start,
+          end,
+          progress: 0,
+          custom_class: task.id + '-task',
+          description: descriptions[task.id]
+        });
+      });
+      return tasks;
+    }
+    // Build and render the single chart
+    const combinedTasks = buildCombinedTasks();
+    // Add custom CSS for med1 variant color only
+    const style = document.createElement('style');
+    style.innerHTML = `.bar.med1-task { --g-bar-color: #43a047 !important; }`;
+    document.head.appendChild(style);
+    // Remove all other color assignments for tasks
+    // Render chart   ignore: ["weekend"], holidays: ["weekend"],
+    let ganttViewMode = 'Week';
+    const g = new Gantt("#gantt1", combinedTasks, { view_mode: ganttViewMode, language: 'en', ignore: ["weekend"], scroll_to: 'start', today_button: false });
+    document.getElementById('view-mode').addEventListener('change', function (e) {
+      ganttViewMode = e.target.value;
+      g.change_view_mode(ganttViewMode);
+      // Hide all .ignored-bar rects if not Day view
+      setTimeout(() => {
+        ignoreBarsFunction();
+      }, 100);
+    });
+    function ignoreBarsFunction() {
+      // Hide all .ignored-bar rects if not Day view
+      const ignoredRects = document.querySelectorAll('.bar-progress, .ignored-bar');
+      ignoredRects.forEach(rect => {
+        if (ganttViewMode !== 'Day') {
+          rect.style.display = 'none';
+        } else {
+          rect.style.display = '';
+        }
+      });
+    }
+    // Initial call to hide ignored bars
+    ignoreBarsFunction();
+
+    // Add scroll event listener to Gantt chart container to re-hide ignored bars, using mousewheel and wheel events as well, all passive
+        const ganttContainer = document.getElementById('gantt1');
+    ['scroll', 'wheel', 'mousewheel'].forEach(eventType => {
+      ganttContainer.addEventListener(eventType, function () {
+        ignoreBarsFunction();
+      }, { passive: true });
+    });
+
+    // Render Medicaid.md task info below the Gantt chart with collapsible sections
+    const medicaidTasksHtml = `
+<h2 style="display:flex;align-items:center;gap:1em;">Medicaid Upgrade Tasks & Estimates
+  <span style="margin-left:auto;display:flex;gap:0.5em;">
+    <button id="toggle-gold" class="role-toggle active" type="button">Gold</button>
+    <button id="toggle-silver" class="role-toggle" type="button">Silver</button>
+    <button id="toggle-bronze" class="role-toggle" type="button">Bronze</button>
+  </span>
+</h2>
+${[{
+        id: 'core',
+        name: 'Build Rulebase Core (core)',
+        depends: 'None',
+        desc: 'Core structure of EDBC rulebase using latest techniques and rad new data model',
+        hours: { Gold: 300, Silver: 300, Bronze: 300 },
+        details: [
+          'EDBC Core + Financial Core + Non-Financial Core',
+          'This core will be the starting point for all new programs added to ELIAS in the future',
+          'Could also serve as the foundation for base product as well as Ohio and other states'
+        ]
+      }, {
+        id: 'med',
+        name: 'Rebuild Medicaid on New Rulebase Core (med)',
+        depends: 'core',
+        desc: 'Refactor/Import legacy IOWA Medicaid rules into the new rulebase model',
+        hours: { Gold: 600, Silver: 600, Bronze: 600 },
+        details: [
+          'Will need special logic for budgeting hierarchy, specifically for CE, DV, Extended budgets',
+          'May need special handling for Passive renewal budgets as well',
+          '<strong>Biggest Risk:</strong> Lack of proper documentation',
+          '<strong>Job Shadow Impact:</strong> Assume that for the first two week a shadow dev will reduce productivity by 80%, then another two weeks 60%, the second month by 40% and then by 10% going forward.'
+        ]
+      }, {
+        id: 'int',
+        name: 'Integration (int)',
+        depends: 'med, exec, core',
+        desc: 'Will need custom cloud style "builders" and "adapters" (input/output integration)',
+        important: 'This has been merged in with "Rebuild Medicaid on New Rulebase Core" task for gantt chart simplicity',
+        hours: { Gold: 200, Silver: 200, Bronze: 200 },
+        details: [
+          'New Cloud "ROM" data model to support new rulebase data model',
+          'New Cloud "EMO" data model to support new rulebase data model',
+          'Consider new features that are battle proven in KEES that would greatly enhance capabilities in Elias (application events, EDBC source, batch job name, etc.)',
+          'Great time to upgrade Hibernate queries/Persistence layer for new inputs/performance improvements',
+          'Consider data normalization for complex concepts like CE periods, post partum periods, etc.'
+        ]
+      }, {
+        id: 'exec',
+        name: 'Rules Execution Services (exec)',
+        depends: 'none',
+        desc: 'Base product provides basic communication with OIA Hub via Spring RestTemplate',
+        hours: { Gold: 200, Silver: 200, Bronze: 200 },
+        details: [
+          'If using OSB for ELIAS, will need to ensure robust strategy for rules execution that considers deployment strategy/routing to correct assessors on IA Hub',
+          'Has base product addressed OAUTH2 token issues? (may not matter when using OSB)',
+          'Base product JSON serialization issues with latest Oracle REST API and their strict JSON validation (even KEES is not aware of this yet)'
+        ]
+      }, {
+        id: 'hub',
+        name: 'Configure OIA Hubs (hub)',
+        depends: 'none',
+        desc: 'Tech team will do most of configuration but there are some things we will need to handle',
+        hours: { Gold: 40, Silver: 40, Bronze: 8 },
+        details: [
+          'Workspace strategy used for deployment containers (dev, npd, prod, sandbox, etc.)',
+          'Configure API users and other HUB users (minimum setup required for local rules devs to deploy candidates)',
+          'Configure Decision Services (if we end up using them)'
+        ]
+      }, {
+        id: 'log',
+        name: 'Logging Strategy (log)',
+        depends: 'exec',
+        desc: 'Need to persist request JSON payloads - PII scrubbed (person names)',
+        hours: { Gold: 80, Silver: 40, Bronze: 8 },
+        details: [
+          'Configurable to persist response as well (not as important but nice to have)',
+          'Need to figure out where the datastore will be - MongoDB or some other type of NoSQL DB is great for this',
+          'Will need some sort of mechanism to tie the persisted log files to an EDBC_ID on the ABMS end',
+          'Access to these logs will be critical for devs but also testing and analysis tools'
+        ]
+      }, {
+        id: 'ver',
+        name: 'Version Control Strategy (ver)',
+        depends: 'none',
+        desc: 'Most likely this will be handled with GIT, similar to KEES, to allow for robust branching, diff and merge operations',
+        hours: { Gold: 80, Silver: 40, Bronze: 8 },
+        details: [
+          'Custom Git hook scripting to trigger snapshot build on rules source commit',
+          'CI/CD pipeline strategy'
+        ]
+      }, {
+        id: 'dep',
+        name: 'Deployment Strategy (dep)',
+        depends: 'ver, hub',
+        desc: 'Deployment "Container" approach similar to KEES or something less robust for IOWA?',
+        hours: { Gold: 80, Silver: 40, Bronze: 8 },
+        details: [
+          'Custom scripting to leverage the Deployments REST API to deploy snapshots to proper containers',
+          'Relationship to version control strategy to pull versioned rules, build and deploy CI/CD pipeline style',
+          'Link to regression test strategy to validate built artifacts against some baseline'
+        ]
+      }, {
+        id: 'regtest',
+        name: 'Regression Testing Strategy',
+        depends: 'none',
+        desc: 'Custom web application based around Oracle\'s TestSuites REST API (possible integration with Azure Test Plans framework)',
+        hours: { Gold: 80, Silver: 40, Bronze: 0 },
+        details: [
+          'Ongoing testing, not upgrade testing',
+          'Gives developer ability to rapidly import EDBC data as regression test (like in OPA 10 days)',
+          'Accelerator/"starter kit" available',
+          'Regression test suite can be connected to CI/CD pipelines'
+        ]
+      }, {
+        id: 'abtest',
+        name: 'Upgrade Regression / AB Testing',
+        depends: 'int',
+        desc: 'Strangler Fig pattern - 2 distinct rule execution paths running in parallel at EDBC execution time',
+        hours: { Gold: 200, Silver: 40, Bronze: 0 },
+        details: [
+          'Connect XML payloads to database payloads so that AB testing can happen outside of ELIAS (perhaps using a new UUID)',
+          'Describe a common intermediate data model for comparison purposes (likely just the new outcome model, mirrored)',
+          'AB comparison of results with match % and detailed results of mismatch',
+          'Test team not involved with integration testing until high match % achieved in AB unit testing'
+        ]
+      }, {
+        id: 'perf',
+        name: 'Performance Testing',
+        depends: 'int',
+        desc: 'Not really our problem but client will probably want to see something on this. KEES spent about 1 month per rulebase on this',
+        hours: { Gold: 200, Silver: 0, Bronze: 0 },
+        details: []
+      }, {
+        id: 'tools',
+        name: 'Custom Tooling/Accelerators',
+        depends: '',
+        desc: 'Tools/apps built to support OIA rules',
+        important: 'This is not included here.  There may be good options from Oracle by the time we go-live - or we may want to bring over tools we used on KEES',
+        hours: {},
+        details: [
+          'Bendicator',
+          'Custom Regression Tester',
+          'SEBAS/What-If/EDBC import direct to test script',
+          'Reports/Batch Assess stats pulled from Admin REST API'
+        ]
+      }, {
+        id: 'train',
+        name: 'Training/Job Shadow',
+        depends: 'core',
+        desc: 'OPA Training (for those new to the tool), Data Model Knowledge Transfer, Job Shadow and Knowledge Transfer',
+        important: 'This one was accounted for my increasing the hours for the "Rebuild Medicaid on New Rulebase Core" task using an estimated impact to development time',
+        hours: { Gold: 398, Silver: 398, Bronze: 0 },
+        details: [
+          'OPA Training (for those new to the tool): 40',
+          'Data Model Knowledge Transfer: 8',
+          'Job Shadow and Knowledge Transfer: 350'
+        ]
+      }].map(task => `
+  <button class="collapsible">${task.name}</button>
+  <div class="collapsible-content">
+    <p><strong>Depends On:</strong> ${task.depends}</p>
+    <p><strong>Description:</strong> ${task.desc}</p>
+    ${task.important ? `<p style="color: red;"><strong>Important:</strong> ${task.important}</p>` : ''}
+    ${Object.keys(task.hours).length ? `<p><strong>Hours by Role:</strong> Gold: ${task.hours.Gold || 0}, Silver: ${task.hours.Silver || 0}, Bronze: ${task.hours.Bronze || 0}</p>` : ''}
+    <ul>${task.details.map(d => `<li>${d}</li>`).join('')}</ul>
+  </div>
+`).join('')}
+`;
+    document.getElementById('medicaid-tasks').innerHTML = medicaidTasksHtml;
+    // Collapsible logic
+    document.querySelectorAll('.collapsible').forEach(btn => {
+      btn.addEventListener('click', function () {
+        this.classList.toggle('active');
+        const content = this.nextElementSibling;
+        if (content.style.display === 'block') {
+          content.style.display = 'none';
+        } else {
+          content.style.display = 'block';
+        }
+      });
+    });
+  </script>
+  <script>
+    // --- Role toggle dynamic logic ---
+    function getSelectedRole() {
+      return localStorage.getItem('SELECTED_ROLE') || 'Gold';
+    }
+    function setSelectedRole(role) {
+      localStorage.setItem('SELECTED_ROLE', role);
+    }
+    function updateRoleToggleUI(role) {
+      document.querySelectorAll('.role-toggle').forEach(btn => {
+        btn.classList.toggle('active', btn.textContent === role);
+      });
+    }
+    function highlightRoleHours(role) {
+      document.querySelectorAll('.collapsible-content').forEach(div => {
+        // Find the <p> whose textContent starts with "Hours by Role:"
+        const pList = div.querySelectorAll('p');
+        let p = null;
+        pList.forEach(candidate => {
+          if (candidate.textContent.trim().startsWith('Hours by Role:')) {
+            p = candidate;
+          }
+        });
+        if (p) {
+          const text = p.textContent;
+          // Extract numbers
+          const match = text.match(/Gold: (\d+), Silver: (\d+), Bronze: (\d+)/);
+          if (match) {
+            const [_, gold, silver, bronze] = match;
+            let html = '<strong>Hours by Role:</strong> ';
+            html += role === 'Gold' ? `<span style="color:#FFD700;font-weight:bold;">Gold: ${gold}</span>` : `Gold: <span style="opacity:.5;">${gold}</span>`;
+            html += ', ';
+            html += role === 'Silver' ? `<span style="color:#888;font-weight:bold;">Silver: ${silver}</span>` : `Silver: <span style="opacity:.5;">${silver}</span>`;
+            html += ', ';
+            html += role === 'Bronze' ? `<span style="color:#b87333;font-weight:bold;">Bronze: ${bronze}</span>` : `Bronze: <span style="opacity:.5;">${bronze}</span>`;
+            p.innerHTML = html;
+          }
+        }
+      });
+    }
+    function updateRoleUI(role) {
+      updateRoleToggleUI(role);
+      highlightRoleHours(role);
+    }
+    // Add event listeners to role toggle buttons
+    ['Gold', 'Silver', 'Bronze'].forEach(role => {
+      document.getElementById('toggle-' + role.toLowerCase()).addEventListener('click', function () {
+        setSelectedRole(role);
+        updateRoleUI(role);
+      });
+    });
+    // On page load, set initial role UI
+    const initialRole = getSelectedRole();
+    updateRoleUI(initialRole);
+  </script>
+  <script>
+    // --- Role-based hours for each task ---
+    const roleHours = {
+      core: { Gold: 300, Silver: 300, Bronze: 300 },
+      med: { Gold: 600, Silver: 600, Bronze: 600 },
+      int: { Gold: 200, Silver: 200, Bronze: 200 },
+      exec: { Gold: 200, Silver: 200, Bronze: 200 },
+      hub: { Gold: 40, Silver: 40, Bronze: 8 },
+      log: { Gold: 80, Silver: 40, Bronze: 8 },
+      ver: { Gold: 80, Silver: 40, Bronze: 8 },
+      dep: { Gold: 80, Silver: 40, Bronze: 8 },
+      perf: { Gold: 200, Silver: 0, Bronze: 0 } // Add Performance Testing
+    };
+    // Helper: get durations in days for a given role
+    function getDurationsForRole(role) {
+      return {
+        core: Math.ceil((roleHours.core[role] || 0) / 8),
+        med: Math.ceil((roleHours.med[role] || 0) / 8),
+        exec: Math.ceil((roleHours.exec[role] || 0) / 8),
+        int: Math.ceil((roleHours.int[role] || 0) / 8),
+        hub: Math.ceil((roleHours.hub[role] || 0) / 8),
+        log: Math.ceil((roleHours.log[role] || 0) / 8),
+        ver: Math.ceil((roleHours.ver[role] || 0) / 8),
+        dep: Math.ceil((roleHours.dep[role] || 0) / 8),
+        perf: Math.ceil((roleHours.perf[role] || 0) / 8) // Add perf
+      };
+    }
+    // --- Gantt chart update logic for role toggle ---
+    let currentGantt = null;
+    function buildCombinedTasksForRole(role) {
+      const durations = getDurationsForRole(role);
+      const tasks = [];
+      // Add core first
+      const core = baseTasks[0];
+      const coreStart = PROJECT_START_DATE;
+      const coreEnd = addDays(coreStart, durations.core);
+      tasks.push({ ...core, start: coreStart, end: coreEnd, progress: 0, custom_class: 'core-task', description: descriptions[core.id] });
+      // Add med variants and, for Gold, perf tasks after each
+      let lastMedEnd = coreEnd;
+      medVariants.forEach((med, idx) => {
+        const medStart = coreEnd;
+        let medDays;
+        if (med.shadow) {
+          medDays = calculateShadowMedDays(roleHours.med[role] || 0, med.devs, med.shadow);
+        } else {
+          const medEffort = (roleHours.med[role] || 0) / (med.devs * med.efficiency);
+          medDays = Math.ceil(medEffort / 8);
+        }
+        const medEnd = addDays(medStart, medDays);
+        let medDescription = descriptions['med'];
+        if (med.shadow) {
+          medDescription += '<br><br><strong>Job Shadow Impact:</strong> For the first 2 weeks, each shadowed dev is only 50% as productive (80% reduction), next 10 days at 40% productivity (60% reduction), next 22 days at 60% productivity (40% reduction),<br>then 90% productivity (10% reduction) for the remainder.<br><strong>Calculated duration:</strong> ' + medDays + ' days with ' + med.devs + ' dev(s) and ' + med.shadow + ' shadow(s).';
+        }
+        tasks.push({
+          id: med.id,
+          name: med.name,
+          start: medStart,
+          end: medEnd,
+          progress: 0,
+          dependencies: 'core', // Only dependent on core
+          custom_class: med.id + '-task',
+          description: medDescription,
+          color: med.color
+        });
+        // Add Performance Testing for each med variant (Gold only)
+        if (role === 'Gold') {
+          const perfId = 'perf' + (idx + 1);
+          const perfStart = medEnd;
+          const perfEnd = addDays(perfStart, durations.perf);
+          tasks.push({
+            id: perfId,
+            name: 'Performance Testing (' + med.name.replace(/\s*\(.*\)/, '') + ')',
+            start: perfStart,
+            end: perfEnd,
+            progress: 0,
+            dependencies: med.id, // Only dependent on its medX
+            custom_class: perfId + '-task',
+            description: 'Performance and load testing for ' + med.name + '. Only required for Gold scenario.',
+            color: med.color
+          });
+          lastMedEnd = perfEnd;
+        } else {
+          lastMedEnd = medEnd;
+        }
+      });
+      // Add remaining tasks
+      baseTasks.slice(1).forEach(task => {
+        let depEnd = PROJECT_START_DATE;
+        if (task.dependencies) {
+          const ids = task.dependencies.split(',').map(s => s.trim());
+          depEnd = ids.reduce((max, id) => {
+            const t = tasks.find(x => x.id === id);
+            return t && t.end > max ? t.end : max;
+          }, PROJECT_START_DATE);
+        }
+        const start = depEnd;
+        const end = addDays(start, durations[task.id]);
+        tasks.push({
+          ...task,
+          start,
+          end,
+          progress: 0,
+          custom_class: task.id + '-task',
+          description: descriptions[task.id]
+        });
+      });
+      return tasks;
+    }
+    function renderGanttForRole(role) {
+      const tasks = buildCombinedTasksForRole(role);
+      // Remove previous SVG if exists
+      const ganttDiv = document.getElementById('gantt1');
+      ganttDiv.innerHTML = '';
+      // Add custom CSS for med1 variant color only
+      if (!document.getElementById('med1-task-style')) {
+        const style = document.createElement('style');
+        style.id = 'med1-task-style';
+        style.innerHTML = `.bar.med1-task { --g-bar-color: #43a047 !important; }`;
+        document.head.appendChild(style);
+      }
+      currentGantt = new Gantt("#gantt1", tasks, { view_mode: ganttViewMode, language: 'en', ignore: ["weekend"], scroll_to: 'start', today_button: false });
+      setTimeout(() => { ignoreBarsFunction(); }, 100);
+      // Re-attach scroll listeners
+      ['scroll', 'wheel', 'mousewheel'].forEach(eventType => {
+        ganttDiv.addEventListener(eventType, function () {
+          ignoreBarsFunction();
+        }, { passive: true });
+      });
+    }
+    // Patch updateRoleUI to also update the Gantt chart
+    const originalUpdateRoleUI = updateRoleUI;
+    updateRoleUI = function(role) {
+      originalUpdateRoleUI(role);
+      renderGanttForRole(role);
+    };
+    // On initial load, render Gantt for selected role
+    renderGanttForRole(getSelectedRole());
+  </script>
+</body>
+<script>
+  console.log('Gantt chart loaded with view mode:', ganttViewMode);
+</script>
+
+</html>
