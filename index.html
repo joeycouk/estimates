@@ -185,8 +185,8 @@
       { id: 'core', name: 'Build Rulebase Core', dependencies: '', duration: durations.core, },
       { id: 'exec', name: 'Rules Execution Services', dependencies: '', duration: durations.exec, },
       // { id: 'int', name: 'Integration', dependencies: 'med1,exec', duration: durations.int, }
-      { id: 'hub', name: 'Configure OIA Hubs', dependencies: '', duration: durations.hub, },
       { id: 'log', name: 'Logging Strategy', dependencies: 'exec', duration: durations.log, },
+      { id: 'hub', name: 'Configure Hubs', dependencies: '', duration: durations.hub, },
       { id: 'ver', name: 'Version Control Strategy', dependencies: '', duration: durations.ver, },
       { id: 'dep', name: 'Deployment Strategy', dependencies: 'ver,hub', duration: durations.dep, }
     ];
